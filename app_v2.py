@@ -197,7 +197,7 @@ def draw_boxes(frame, result, vehicle_boxes=None, require_vehicle=False):
         conf = float(box.conf[0])
         x1, y1, x2, y2 = map(int, box.xyxy[0])
 
-        if require_vehicle and not is_near_vehicle((x1, y1, x2, y2), vehicle_boxes or []):
+        if require_vehicle and cls_id in (1, 2) and not is_near_vehicle((x1, y1, x2, y2), vehicle_boxes or []):
             continue
 
         color = CLASS_COLORS_BGR.get(cls_id, (255, 255, 255))
@@ -253,7 +253,7 @@ with st.sidebar:
     conf_threshold = st.slider("Detection sensitivity", 0.05, 0.95, 0.25, 0.05)
     st.caption("Lower catches more, but risks false alarms. Higher is stricter.")
     require_vehicle = st.checkbox("Require a visible motorcycle/bicycle", value=True)
-    st.caption("Only counts people near a two-wheeler as riders — filters out pedestrians and unrelated bare heads elsewhere in frame.")
+    st.caption("Every person in frame is still counted. This only limits Helmet/No-helmet flags to people near a two-wheeler, so a pedestrian isn't marked as a violation.")
 
 tab_image, tab_video, tab_webcam = st.tabs(["Photo", "Footage", "Live Feed"])
 
