@@ -2,6 +2,7 @@ import streamlit as st
 import cv2
 import numpy as np
 import tempfile
+import imageio
 from pathlib import Path
 from collections import Counter
 from ultralytics import YOLO
@@ -152,7 +153,41 @@ def load_model(path):
     return YOLO(path)
 
 
-def draw_boxes(frame, result):
+@st.cache_resource
+def load_vehicle_model():
+    # General-purpose COCO model — used only to check "is there a motorcycle/bicycle
+    # in frame" so helmet detections outside a road context don't get flagged.
+    return YOLO("yolov8n.pt")
+
+
+VEHICLE_CLASS_IDS = {1, 3}  # COCO: 1=bicycle, 3=motorcycle
+VEHICLE_CONF = 0.25
+
+
+def get_vehicle_boxes(frame, vehicle_model):
+    result = vehicle_model.predict(frame, conf=VEHICLE_CONF, classes=list(VEHICLE_CLASS_IDS), verbose=False)[0]
+    boxes = []
+    if result.boxes is not None:
+        for box in result.boxes:
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            boxes.append((x1, y1, x2, y2))
+    return boxes
+
+
+def is_near_vehicle(box, vehicle_boxes):
+    x1, y1, x2, y2 = box
+    cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+    for vx1, vy1, vx2, vy2 in vehicle_boxes:
+        vw, vh = vx2 - vx1, vy2 - vy1
+        # riders' heads sit above the vehicle box, so extend generously upward
+        ex1, ex2 = vx1 - 0.6 * vw, vx2 + 0.6 * vw
+        ey1, ey2 = vy1 - 2.5 * vh, vy2 + 0.3 * vh
+        if ex1 <= cx <= ex2 and ey1 <= cy <= ey2:
+            return True
+    return False
+
+
+def draw_boxes(frame, result, vehicle_boxes=None, require_vehicle=False):
     boxes = result.boxes
     counts = Counter()
     if boxes is None:
@@ -161,6 +196,10 @@ def draw_boxes(frame, result):
         cls_id = int(box.cls[0])
         conf = float(box.conf[0])
         x1, y1, x2, y2 = map(int, box.xyxy[0])
+
+        if require_vehicle and not is_near_vehicle((x1, y1, x2, y2), vehicle_boxes or []):
+            continue
+
         color = CLASS_COLORS_BGR.get(cls_id, (255, 255, 255))
         label = f"{CLASS_NAMES.get(cls_id, cls_id)} {conf:.2f}"
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
@@ -207,11 +246,14 @@ if not Path(MODEL_PATH).exists():
     st.stop()
 
 model = load_model(MODEL_PATH)
+vehicle_model = load_vehicle_model()
 
 with st.sidebar:
     st.markdown('<div class="sidebar-label">Inspection Settings</div>', unsafe_allow_html=True)
     conf_threshold = st.slider("Detection sensitivity", 0.05, 0.95, 0.25, 0.05)
     st.caption("Lower catches more, but risks false alarms. Higher is stricter.")
+    require_vehicle = st.checkbox("Require a visible motorcycle/bicycle", value=True)
+    st.caption("Only counts people near a two-wheeler as riders — filters out pedestrians and unrelated bare heads elsewhere in frame.")
 
 tab_image, tab_video, tab_webcam = st.tabs(["Photo", "Footage", "Live Feed"])
 
@@ -223,7 +265,8 @@ with tab_image:
         frame = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
 
         result = model.predict(frame, conf=conf_threshold, verbose=False)[0]
-        annotated, counts = draw_boxes(frame.copy(), result)
+        vehicle_boxes = get_vehicle_boxes(frame, vehicle_model) if require_vehicle else []
+        annotated, counts = draw_boxes(frame.copy(), result, vehicle_boxes, require_vehicle)
 
         st.image(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB), use_container_width=True)
         render_readout(counts)
@@ -231,18 +274,21 @@ with tab_image:
 # ---------------- VIDEO TAB ----------------
 with tab_video:
     uploaded_vid = st.file_uploader("Upload footage", type=["mp4", "mov", "avi"], key="vid")
+    st.caption("Runs two models per frame when vehicle-context filtering is on — expect it to take longer on longer clips.")
     if uploaded_vid:
         tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
         tfile.write(uploaded_vid.read())
 
         cap = cv2.VideoCapture(tfile.name)
         fps = cap.get(cv2.CAP_PROP_FPS) or 25
-        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
         out_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
-        writer = cv2.VideoWriter(out_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
+        # H.264 via imageio-ffmpeg — cv2's mp4v codec writes files most browsers can't play back.
+        writer = imageio.get_writer(
+            out_path, format="FFMPEG", mode="I", fps=fps,
+            codec="libx264", pixelformat="yuv420p",
+        )
 
         progress = st.progress(0, text="Reviewing footage...")
         total_counts = Counter()
@@ -253,16 +299,17 @@ with tab_video:
             if not ret:
                 break
             result = model.predict(frame, conf=conf_threshold, verbose=False)[0]
-            annotated, counts = draw_boxes(frame, result)
+            vehicle_boxes = get_vehicle_boxes(frame, vehicle_model) if require_vehicle else []
+            annotated, counts = draw_boxes(frame, result, vehicle_boxes, require_vehicle)
             total_counts.update(counts)
-            writer.write(annotated)
+            writer.append_data(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB))
 
             frame_idx += 1
             if total_frames:
                 progress.progress(min(frame_idx / total_frames, 1.0), text=f"Frame {frame_idx}/{total_frames}")
 
         cap.release()
-        writer.release()
+        writer.close()
         progress.empty()
 
         st.video(out_path)
@@ -279,11 +326,13 @@ with tab_webcam:
     class HelmetProcessor(VideoProcessorBase):
         def __init__(self):
             self.conf = conf_threshold
+            self.require_vehicle = require_vehicle
 
         def recv(self, frame):
             img = frame.to_ndarray(format="bgr24")
             result = model.predict(img, conf=self.conf, verbose=False)[0]
-            annotated, _ = draw_boxes(img, result)
+            vehicle_boxes = get_vehicle_boxes(img, vehicle_model) if self.require_vehicle else []
+            annotated, _ = draw_boxes(img, result, vehicle_boxes, self.require_vehicle)
             return av.VideoFrame.from_ndarray(annotated, format="bgr24")
 
     webrtc_streamer(
