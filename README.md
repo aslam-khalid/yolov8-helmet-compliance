@@ -1,6 +1,6 @@
 # 🦺 Helmet Compliance Inspector — YOLOv8
 
-**AIRI Team, PITB — AI Internship Task 1**
+**AIRI Team, PITB — AI Internship**
 Individual project by **Muhammad Aslam Khalid**
 
 [![Live Demo](https://img.shields.io/badge/demo-streamlit-FF4B4B?logo=streamlit&logoColor=white)](https://yolov8-helmet-compliance-t9kdjwgf2bdsbjbifpxijj.streamlit.app)
@@ -82,4 +82,4 @@ streamlit run app.py
 
 ## Credits
 
-Built by Muhammad Aslam Khalid as an individual deliverable for the AIRI/PITB AI internship, Task 1.
+Built by Muhammad Aslam Khalid as an individual deliverable for the AIRI/PITB AI internship.
