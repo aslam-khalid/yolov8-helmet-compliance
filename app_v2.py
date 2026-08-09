@@ -161,17 +161,26 @@ def load_vehicle_model():
 
 
 VEHICLE_CLASS_IDS = {1, 3}  # COCO: 1=bicycle, 3=motorcycle
+CONTEXT_CLASS_IDS = {0, 1, 3}  # COCO: 0=person, 1=bicycle, 3=motorcycle
 VEHICLE_CONF = 0.25
 
 
-def get_vehicle_boxes(frame, vehicle_model):
-    result = vehicle_model.predict(frame, conf=VEHICLE_CONF, classes=list(VEHICLE_CLASS_IDS), verbose=False)[0]
-    boxes = []
+def get_context_boxes(frame, vehicle_model):
+    """Use the general COCO model for Person + vehicle boxes — it's trained on far
+    more diverse person imagery than the custom model, whose Person class is weak
+    (2 of 3 source datasets never labeled Person at all)."""
+    result = vehicle_model.predict(frame, conf=VEHICLE_CONF, classes=list(CONTEXT_CLASS_IDS), verbose=False)[0]
+    persons, vehicles = [], []
     if result.boxes is not None:
         for box in result.boxes:
+            cid = int(box.cls[0])
             x1, y1, x2, y2 = map(int, box.xyxy[0])
-            boxes.append((x1, y1, x2, y2))
-    return boxes
+            conf = float(box.conf[0])
+            if cid == 0:
+                persons.append((x1, y1, x2, y2, conf))
+            else:
+                vehicles.append((x1, y1, x2, y2))
+    return persons, vehicles
 
 
 def is_near_vehicle(box, vehicle_boxes):
@@ -179,7 +188,6 @@ def is_near_vehicle(box, vehicle_boxes):
     cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
     for vx1, vy1, vx2, vy2 in vehicle_boxes:
         vw, vh = vx2 - vx1, vy2 - vy1
-        # riders' heads sit above the vehicle box, so extend generously upward
         ex1, ex2 = vx1 - 0.6 * vw, vx2 + 0.6 * vw
         ey1, ey2 = vy1 - 2.5 * vh, vy2 + 0.3 * vh
         if ex1 <= cx <= ex2 and ey1 <= cy <= ey2:
@@ -187,25 +195,36 @@ def is_near_vehicle(box, vehicle_boxes):
     return False
 
 
-def draw_boxes(frame, result, vehicle_boxes=None, require_vehicle=False):
-    boxes = result.boxes
+def draw_boxes(frame, result, persons, vehicle_boxes=None, require_vehicle=False):
     counts = Counter()
-    if boxes is None:
-        return frame, counts
-    for box in boxes:
-        cls_id = int(box.cls[0])
-        conf = float(box.conf[0])
-        x1, y1, x2, y2 = map(int, box.xyxy[0])
 
-        if require_vehicle and cls_id in (1, 2) and not is_near_vehicle((x1, y1, x2, y2), vehicle_boxes or []):
-            continue
-
-        color = CLASS_COLORS_BGR.get(cls_id, (255, 255, 255))
-        label = f"{CLASS_NAMES.get(cls_id, cls_id)} {conf:.2f}"
+    # Person boxes — from the robust COCO model, always drawn
+    for x1, y1, x2, y2, conf in persons:
+        color = CLASS_COLORS_BGR[0]
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-        cv2.putText(frame, label, (x1, max(y1 - 8, 0)),
+        cv2.putText(frame, f"Person {conf:.2f}", (x1, max(y1 - 8, 0)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-        counts[cls_id] += 1
+        counts[0] += 1
+
+    # Helmet / No-helmet — from the custom model only
+    boxes = result.boxes
+    if boxes is not None:
+        for box in boxes:
+            cls_id = int(box.cls[0])
+            if cls_id not in (1, 2):
+                continue
+            conf = float(box.conf[0])
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+
+            if require_vehicle and not is_near_vehicle((x1, y1, x2, y2), vehicle_boxes or []):
+                continue
+
+            color = CLASS_COLORS_BGR.get(cls_id, (255, 255, 255))
+            label = f"{CLASS_NAMES.get(cls_id, cls_id)} {conf:.2f}"
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(frame, label, (x1, max(y1 - 8, 0)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            counts[cls_id] += 1
     return frame, counts
 
 
@@ -265,8 +284,8 @@ with tab_image:
         frame = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
 
         result = model.predict(frame, conf=conf_threshold, verbose=False)[0]
-        vehicle_boxes = get_vehicle_boxes(frame, vehicle_model) if require_vehicle else []
-        annotated, counts = draw_boxes(frame.copy(), result, vehicle_boxes, require_vehicle)
+        persons, vehicle_boxes = get_context_boxes(frame, vehicle_model)
+        annotated, counts = draw_boxes(frame.copy(), result, persons, vehicle_boxes, require_vehicle)
 
         st.image(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB), use_container_width=True)
         render_readout(counts)
@@ -299,8 +318,8 @@ with tab_video:
             if not ret:
                 break
             result = model.predict(frame, conf=conf_threshold, verbose=False)[0]
-            vehicle_boxes = get_vehicle_boxes(frame, vehicle_model) if require_vehicle else []
-            annotated, counts = draw_boxes(frame, result, vehicle_boxes, require_vehicle)
+            persons, vehicle_boxes = get_context_boxes(frame, vehicle_model)
+            annotated, counts = draw_boxes(frame, result, persons, vehicle_boxes, require_vehicle)
             total_counts.update(counts)
             writer.append_data(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB))
 
@@ -331,8 +350,8 @@ with tab_webcam:
         def recv(self, frame):
             img = frame.to_ndarray(format="bgr24")
             result = model.predict(img, conf=self.conf, verbose=False)[0]
-            vehicle_boxes = get_vehicle_boxes(img, vehicle_model) if self.require_vehicle else []
-            annotated, _ = draw_boxes(img, result, vehicle_boxes, self.require_vehicle)
+            persons, vehicle_boxes = get_context_boxes(img, vehicle_model)
+            annotated, _ = draw_boxes(img, result, persons, vehicle_boxes, self.require_vehicle)
             return av.VideoFrame.from_ndarray(annotated, format="bgr24")
 
     webrtc_streamer(
