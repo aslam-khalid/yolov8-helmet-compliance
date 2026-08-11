@@ -22,7 +22,7 @@ Motorcycle riders not wearing helmets are a major cause of preventable road inju
 
 ## Live demo
 
-👉 **[Try it here]([https://yolov8-helmet-compliance-4u3dasf3tltvycrmaxfy8m.streamlit.app/))**
+👉 **[Try it here](https://yolov8-helmet-compliance-4u3dasf3tltvycrmaxfy8m.streamlit.app/)**
 
 ## Project files
 
