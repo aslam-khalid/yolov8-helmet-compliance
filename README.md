@@ -24,6 +24,11 @@ Motorcycle riders not wearing helmets are a major cause of preventable road inju
 
 👉 **[Try it here](https://yolov8-helmet-compliance-cjbmvmbwn3clzpvbqournh.streamlit.app/)**
 
+## Project files
+
+Full project files (dataset, training notebook, outputs, results) are available on Google Drive:
+👉 **[Google Drive folder](https://drive.google.com/drive/folders/1cFC66KVKPeS4r3z7c3j7QetTcon3uG2j?usp=sharing)**
+
 ## Dataset
 
 Built by merging three Roboflow Universe sources (helmet/no-helmet imagery) into a single YOLO-format dataset, with every source's class IDs remapped by **name**, not index — an early version of the merge trusted class-index order across datasets, which silently swapped "Person" and "No helmet" labels for ~1,200 boxes. Fixed by matching class names against a canonical scheme before merging.
