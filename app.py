@@ -11,7 +11,7 @@ from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfigurati
 
 st.set_page_config(page_title="Helmet Compliance Inspector", page_icon="🦺", layout="wide")
 
-MODEL_PATH = "best.pt"  # <-- put your trained weights next to this file, or change path
+MODEL_PATH = str(Path(__file__).parent / "best.pt")  # <-- put your trained weights next to this file, or change path
 CLASS_NAMES = {0: "Person", 1: "Helmet", 2: "No helmet"}
 
 # BGR for cv2 drawing — matches the UI accent colors below
